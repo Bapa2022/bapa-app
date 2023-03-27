@@ -1,13 +1,11 @@
-import { IconTrash } from '@tabler/icons';
+import { ActionIcon } from '@mantine/core';
+import { IconTrash } from '@tabler/icons-react';
 import axios, { AxiosError } from 'axios';
+import dayjs from 'dayjs';
 import React from 'react';
 import { boxPageSelector, removeTransaction } from 'src/features/BoxPage';
 import { useAppDispatch, useAppSelector } from 'src/store/hooks';
-import {
-  IMainTransaction,
-  ITransaction,
-  ITransactionResponse,
-} from 'src/types';
+import { ITransaction } from 'src/types';
 import { currencyFormat } from 'src/utils';
 import Swal from 'sweetalert2';
 
@@ -17,13 +15,16 @@ interface Props {
 const TransactionTableItem = ({ transaction }: Props) => {
   const { showingMainBox: isMainBox } = useAppSelector(boxPageSelector);
   const dispatch = useAppDispatch();
-  const otherBox = isMainBox && !!transaction.cashbox;
+  const otherBox =
+    isMainBox && transaction.cashbox && typeof transaction.cashbox !== 'string'
+      ? transaction.cashbox
+      : null;
 
   const deleteTransaction = async () => {
-    const { id, cashbox, description, amount } = transaction;
-    const url = cashbox
-      ? `/cashboxes/${cashbox}/transactions/${id}`
-      : `/main-box/transactions/${id}`;
+    const { id, description, amount } = transaction;
+    const url = otherBox
+      ? `/cashboxes/minors/${otherBox.id}/transactions/${id}`
+      : `/cashboxes/main/transactions/${id}`;
 
     const message = /*html */ `
       La transacción "<strong>${description}</strong>"
@@ -43,7 +44,7 @@ const TransactionTableItem = ({ transaction }: Props) => {
         const result = { ok: false, message: '' };
 
         try {
-          await axios.delete<ITransactionResponse>(url);
+          await axios.delete<ITransaction>(url);
           result.ok = true;
           result.message = `¡La transacción por valor de <strong>${currencyFormat(
             amount
@@ -77,43 +78,57 @@ const TransactionTableItem = ({ transaction }: Props) => {
   };
 
   return (
-    <tr className="text-dark dark:text-gray-300">
-      <td className="whitespace-nowrap px-3 py-2">
-        <div className="text-center">
+    <tr
+      className={
+        otherBox
+          ? 'text-dark opacity-20 dark:text-gray-300'
+          : 'text-dark dark:text-gray-300'
+      }
+    >
+      {/* TRANSACTION DATE */}
+      <td>
+        <div className="whitespace-nowrap text-center">
           <p className="text-sm">
-            {transaction.transactionDate.format('DD/MM/YY hh:mm a')}
+            {dayjs(transaction.transactionDate).format('DD/MM/YY hh:mm a')}
           </p>
-          <p className="text-xs">{transaction.transactionDate.fromNow()}</p>
+          <p className="text-xs">
+            {dayjs(transaction.transactionDate).fromNow()}
+          </p>
         </div>
       </td>
+
+      {/* DESCRIPTION */}
       <td className="px-3 py-2 text-sm">
         <div>
-          <p>{transaction.description}</p>
-          {otherBox && (
+          <p className="text-xs lg:text-base">{transaction.description}</p>
+          {otherBox ? (
             <p className="text-xs">
-              pertenece a :{' '}
-              <span className="font-bold">
-                {(transaction as IMainTransaction).cashbox?.name}
-              </span>
+              <span>Pertence a: </span>
+              <span className="font-bold">{otherBox.name}</span>
             </p>
-          )}
+          ) : null}
         </div>
       </td>
-      <td className="px-3 py-2 text-right text-sm">
-        {currencyFormat(transaction.amount)}
-      </td>
+
+      {/* AMOUNT */}
+      <td className="text-right">{currencyFormat(transaction.amount)}</td>
+
+      {/* BALANCE */}
       <td
-        className={`px-3 py-2 text-right text-sm ${otherBox && 'line-through'}`}
+        className={
+          otherBox
+            ? `hidden text-sm line-through lg:table-cell`
+            : `hidden  text-sm lg:table-cell`
+        }
       >
         {currencyFormat(transaction.balance)}
       </td>
-      <td className="py-2 pl-3 pr-5 text-sm">
-        <button
-          className="rounded-full border-2 border-red-600 border-opacity-50 p-2 text-red-600 text-opacity-50 transition-colors hover:border-opacity-80 hover:text-opacity-80 active:border-opacity-100 active:text-opacity-100"
-          onClick={deleteTransaction}
-        >
-          <IconTrash size={16} stroke={3} />
-        </button>
+      <td>
+        <div className="flex justify-center">
+          <ActionIcon color="red" size="lg" onClick={deleteTransaction}>
+            <IconTrash size={16} stroke={3} />
+          </ActionIcon>
+        </div>
       </td>
     </tr>
   );

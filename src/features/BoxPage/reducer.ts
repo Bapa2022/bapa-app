@@ -1,16 +1,15 @@
 import { createReducer } from '@reduxjs/toolkit';
-import { ErrorResponse } from '../CategoryPage/types';
+import { ErrorResponse } from 'src/types';
 import {
   closeBox,
   fetchBoxes,
+  getGlobalBalance,
   hideCreateForm,
   hideTransactionForm,
   mountBox,
-  mountBoxes,
   mountBoxToClose,
   mountBoxToOpen,
   mountGlobalTransactions,
-  mountMainBox,
   openBox,
   removeBox,
   removeTransaction,
@@ -18,6 +17,7 @@ import {
   showTransactionForm,
   storeBox,
   storeTransaction,
+  unmountBox,
   unmountBoxToClose,
   unmountBoxToOpen,
   unmountTransactions,
@@ -26,10 +26,13 @@ import { BoxPageState } from './types';
 
 const initialState: BoxPageState = {
   boxes: [],
+  balance: 0,
+  firstFetchLoading: true,
   fetchLoading: true,
+  fetchIsSuccess: false,
   fetchError: null,
-  mainBox: null,
   showingMainBox: false,
+  changeIsSuccess: false,
   // add box property
   createFormOpened: false,
   storeBoxLoading: false,
@@ -63,29 +66,34 @@ export const boxPageReducer = createReducer(initialState, builder => {
   // MOUNTH BOXES
   // --------------------------------------------------------------------------
   builder
-    .addCase(mountBoxes, (state, { payload }) => {
-      state.boxSelected = payload.find(box => box.id === state.boxSelected?.id);
-      state.boxes = payload;
-    })
-    .addCase(mountMainBox, (state, { payload }) => {
-      state.mainBox = payload;
-    })
     .addCase(fetchBoxes.pending, state => {
       state.fetchLoading = true;
       state.fetchError = null;
+      state.fetchIsSuccess = false;
+      state.changeIsSuccess = false;
+    })
+    .addCase(fetchBoxes.fulfilled, (state, { payload }) => {
+      if (state.firstFetchLoading) {
+        state.firstFetchLoading = false;
+      }
+      state.boxes = payload;
+      state.fetchLoading = false;
+      state.fetchIsSuccess = true;
+      state.changeIsSuccess = true;
+
       // Unmount Current box
       state.showingMainBox = false;
       state.boxSelected = undefined;
       state.transactions = [];
     })
-    .addCase(fetchBoxes.fulfilled, (state, { payload }) => {
-      state.boxes = payload;
-      state.fetchLoading = false;
-    })
     .addCase(fetchBoxes.rejected, state => {
       state.fetchLoading = false;
       state.fetchError = 'Error al cargar las cajas';
     });
+
+  builder.addCase(getGlobalBalance.fulfilled, (state, { payload }) => {
+    state.balance = payload;
+  });
   // --------------------------------------------------------------------------
   // CREATE NEW BOXES
   // --------------------------------------------------------------------------
@@ -103,11 +111,13 @@ export const boxPageReducer = createReducer(initialState, builder => {
       state.storeBoxLoading = true;
       state.storeBoxError = null;
       state.storeBoxIsSuccess = false;
+      state.changeIsSuccess = false;
     })
     .addCase(storeBox.fulfilled, (state, { payload }) => {
       state.boxes.push(payload);
       state.storeBoxIsSuccess = true;
       state.storeBoxLoading = false;
+      state.changeIsSuccess = true;
     })
     .addCase(storeBox.rejected, (state, { payload }) => {
       state.storeBoxError = payload as ErrorResponse;
@@ -130,12 +140,14 @@ export const boxPageReducer = createReducer(initialState, builder => {
       state.openBoxLoading = true;
       state.openBoxIsSuccess = false;
       state.openBoxError = null;
+      state.changeIsSuccess = false;
     })
     .addCase(openBox.fulfilled, (state, { payload }) => {
       const index = state.boxes.findIndex(box => box.id === payload.id);
       if (index >= 0) {
         state.boxes.splice(index, 1, payload);
         state.openBoxIsSuccess = true;
+        state.changeIsSuccess = true;
       }
 
       state.openBoxLoading = false;
@@ -161,12 +173,19 @@ export const boxPageReducer = createReducer(initialState, builder => {
       state.closeBoxLoading = true;
       state.closeBoxIsSuccess = false;
       state.closeBoxError = null;
+      state.changeIsSuccess = false;
     })
     .addCase(closeBox.fulfilled, (state, { payload }) => {
       const index = state.boxes.findIndex(box => box.id === payload.id);
       if (index >= 0) {
         state.boxes.splice(index, 1, payload);
         state.closeBoxIsSuccess = true;
+        state.changeIsSuccess = true;
+      }
+
+      if (state.boxSelected && state.boxSelected.id === payload.id) {
+        state.boxSelected = undefined;
+        state.transactions = [];
       }
 
       state.closeBoxLoading = false;
@@ -185,17 +204,38 @@ export const boxPageReducer = createReducer(initialState, builder => {
       state.transactionsError = null;
       state.transactions = [];
       state.showingMainBox = false;
+      state.changeIsSuccess = false;
     })
     .addCase(mountBox.fulfilled, (state, { payload }) => {
-      state.boxSelected = state.boxes.find(item => item.id === payload.boxId);
-      state.transactions = payload.transactions;
-      state.mountBoxIsSuccess = true;
+      const { boxes } = state;
+      const cashboxIndex = boxes.findIndex(item => item.id === payload.id);
+
+      if (cashboxIndex >= 0) {
+        const cashbox = boxes[cashboxIndex];
+
+        if (cashbox.balance !== payload.balance) {
+          cashbox.balance = payload.balance;
+          boxes.splice(cashboxIndex, 1, cashbox);
+          state.boxes = boxes;
+        }
+
+        state.boxSelected = cashbox;
+        state.transactions = payload.transactions;
+        state.mountBoxIsSuccess = true;
+        state.changeIsSuccess = true;
+      }
+
       state.loadingTransactions = false;
     })
     .addCase(mountBox.rejected, (state, { payload }) => {
       state.loadingTransactions = false;
       state.transactionsError = payload as ErrorResponse | null;
     });
+
+  builder.addCase(unmountBox, state => {
+    state.boxSelected = undefined;
+    state.transactions = [];
+  });
   // --------------------------------------------------------------------------
   // SHOW MAIN TRANSACTION
   // --------------------------------------------------------------------------
@@ -236,28 +276,33 @@ export const boxPageReducer = createReducer(initialState, builder => {
       state.storeTransactionLoading = true;
       state.storeTransactionIsSuccess = false;
       state.storeTransactionError = null;
+      state.changeIsSuccess = false;
     })
     .addCase(storeTransaction.fulfilled, (state, { payload }) => {
       const { cashbox } = payload;
 
       // *Update the balance of box
+      state.balance += payload.amount;
+
       if (cashbox) {
         const boxIndex = state.boxes.findIndex(box => box.id === cashbox);
         if (boxIndex >= 0) {
           const box = state.boxes[boxIndex];
           box.balance = (box.balance || 0) + payload.amount;
+          payload.balance = box.balance;
           state.boxes.splice(boxIndex, 1, box);
           if (state.boxSelected && state.boxSelected.id === box.id) {
             state.boxSelected = box;
           }
         }
-      } else if (state.mainBox) {
-        state.mainBox.balance += payload.amount;
+      } else {
+        payload.balance = state.balance;
       }
 
       state.transactions.push(payload);
       state.storeTransactionIsSuccess = true;
       state.storeTransactionLoading = false;
+      state.changeIsSuccess = true;
     })
     .addCase(storeTransaction.rejected, (state, { payload }) => {
       state.storeTransactionLoading = false;
@@ -275,7 +320,7 @@ export const boxPageReducer = createReducer(initialState, builder => {
     state.boxes = state.boxes.filter(box => box.id !== payload);
   });
   builder.addCase(removeTransaction, (state, { payload }) => {
-    const { transactions, boxSelected, mainBox, boxes } = state;
+    const { transactions, boxSelected, boxes } = state;
     const transactionIndex = transactions.findIndex(({ id }) => id === payload);
 
     if (transactionIndex >= 0) {
@@ -283,7 +328,8 @@ export const boxPageReducer = createReducer(initialState, builder => {
       // Update box balance
       if (transaction.cashbox) {
         const { cashbox, amount } = transaction;
-        const boxIndex = boxes.findIndex(({ id }) => id === cashbox);
+        const boxId = typeof cashbox === 'string' ? cashbox : cashbox.id;
+        const boxIndex = boxes.findIndex(({ id }) => id === boxId);
         if (boxIndex >= 0) {
           const box = boxes[boxIndex];
           box.balance = (box.balance || 0) - amount;
@@ -294,12 +340,10 @@ export const boxPageReducer = createReducer(initialState, builder => {
             state.boxSelected = box;
           }
         }
-      } else if (mainBox) {
-        mainBox.balance -= transaction.amount;
-        state.mainBox = mainBox;
       }
 
       state.transactions.splice(transactionIndex, 1);
+      state.balance -= transaction.amount;
     }
   });
 });
